@@ -107,10 +107,20 @@ Version history
 
 2.1.7:
     - accounts for absorption/scattering interaction for transmittance of absorbing gases
+    - fix bugs for true wavelength
+    - fix for new ADS CAMS format
+
+2.1.8:
+    - improve log and CI
+
+2.1.9:
+    - fix for bug in azimuth handling in glint correction
+    - enables L1C netcdf as intput in CLI
+
 '''
 
 __package__ = 'grs'
-__version__ = '2.1.7'
+__version__ = '2.1.9'
 
 
 from .acutils import Aerosol, Misc, Rasterization
@@ -121,10 +131,4 @@ from .output import L2aProduct
 from .mask import Masking
 from .grs_process import Process
 
-import logging
 
-#init logger
-logger = logging.getLogger()
-
-level = logging.getLevelName("INFO")
-logger.setLevel(level)

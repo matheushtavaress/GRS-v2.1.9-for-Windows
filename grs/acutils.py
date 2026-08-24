@@ -2,7 +2,6 @@
 Atmospheric Correction utilities to manage LUT and atmosphere parameters (aerosols, gases)
 '''
 
-import os, sys
 import numpy as np
 import xarray as xr
 from scipy.optimize import curve_fit
@@ -219,9 +218,7 @@ class Aerosol:
 
 
 class CamsParams:
-    def __init__(self,
-                 name,
-                 resol):
+    def __init__(self, name, resol):
         self.name = name
         self.resol = resol
 
@@ -239,13 +236,13 @@ class Gases():
         self.tno2c = 3e-6
         self.tch4c = 1e-2
         self.psl = 1013
-        self.coef_abs_scat = {'co2':0.4,
-                              'o2':0.3,
-                              'o4':0.3,
+        self.coef_abs_scat = {'co2': 0.4,
+                              'o2': 0.3,
+                              'o4': 0.3,
                               'ch4': 0.5,
                               'no2': 1,
                               'o3': 1,
-                              'h2o':0.3}
+                              'h2o': 0.3}
 
 
 class GaseousTransmittance(Gases):
@@ -256,7 +253,7 @@ class GaseousTransmittance(Gases):
     def __init__(self, prod, cams):
 
         Gases.__init__(self)
-        self.xmin, self.ymin, self.xmax, self.ymax = prod.raster.rio.bounds()
+        self.xmin, self.ymin, self.xmax, self.ymax = prod.raster.rio.bounds(recalc=True)
         self.prod = prod
         self.cams = cams
         self.gas_lut = prod.gas_lut
@@ -264,7 +261,7 @@ class GaseousTransmittance(Gases):
         self.SRF = self.prod.raster.SRF
         self.air_mass_mean = self.prod.air_mass_mean
         self.pressure = cams.raster.sp * 1e-2
-        #self.coef_abs_scat = 0.3
+
         self.Tg_tot_coarse = None
         self.cams_gases = {'ch4': CamsParams('tc_ch4', 4),
                            'no2': CamsParams('tcno2', 7),

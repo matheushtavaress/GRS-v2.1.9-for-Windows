@@ -37,7 +37,7 @@ class Product():
         :param output: Deprecated
         '''
 
-        self.processor = __package__ + '_' + __version__
+        self.processor = __package__ + '_cnes_' + __version__
 
         self.raster = l1c_obj  # .prod
         # TODO check why drivers sends an object for wl coordinates instead of array of int
@@ -62,10 +62,10 @@ class Product():
         self.width = self.x.__len__()
         self.height = self.y.__len__()
 
-        self.lonmin, self.latmin, self.lonmax, self.latmax = self.raster.rio.transform_bounds(4326)
+        self.lonmin, self.latmin, self.lonmax, self.latmax = self.raster.rio.transform_bounds(4326, recalc=True)
         # set longitude between 0 and 360 deg
         self.lonmin, self.lonmax, = self.lonmin % 360, self.lonmax % 360
-        self.xmin, self.ymin, self.xmax, self.ymax = self.raster.rio.bounds()
+        self.xmin, self.ymin, self.xmax, self.ymax = self.raster.rio.bounds(recalc=True)
 
         self.wl = self.raster.wl
         self.central_wavelength = self.raster.wl_true.values
@@ -96,8 +96,6 @@ class Product():
         #                                         'units': 'mW cm-2 um-1'})
 
         self.auxdatabase = auxdatabase
-        self.auxdata = None
-        self.aero_lut= None
         self.output = output
 
         #########################
@@ -129,10 +127,9 @@ class Product():
 
         # pre-computed auxiliary data
         self.dirdata = config['path']['grsdata']
-        self.abs_gas_file = files('grs.data.lut.gases')/'lut_abs_opt_thickness_normalized.nc'
+        self.abs_gas_file = files('grs.data.lut.gases') / 'lut_abs_opt_thickness_normalized.nc'
         # self.lut_file = opj(self.dirdata, 'lut', 'opac_osoaa_lut_v2.nc')
-        self.water_vapor_transmittance_file = files('grs.data.lut.gases')/'water_vapor_transmittance.nc'
-        print(self.abs_gas_file)
+        self.water_vapor_transmittance_file = files('grs.data.lut.gases') / 'water_vapor_transmittance.nc'
         self.load_auxiliary_data()
 
         # set retrieved parameter unit (Rrs or Lwn); is passed to fortran module
@@ -190,12 +187,12 @@ class Product():
         '''
 
         # get LUT
-        self.gas_lut = xr.open_dataset(self.abs_gas_file,engine='h5netcdf')
+        self.gas_lut = xr.open_dataset(self.abs_gas_file)
         # self.aero_lut = xr.open_dataset(self.lut_file)
         # convert wavelength in nanometer
         # self.aero_lut['wl'] = self.aero_lut['wl'] * 1000
         # self.aero_lut['wl'].attrs['description'] = 'wavelength of simulation (nanometer)'
-        self.Twv_lut = xr.open_dataset(self.water_vapor_transmittance_file,engine='h5netcdf')
+        self.Twv_lut = xr.open_dataset(self.water_vapor_transmittance_file)
 
     def set_outfile(self, file):
         '''

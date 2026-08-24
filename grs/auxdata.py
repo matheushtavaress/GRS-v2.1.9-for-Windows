@@ -13,6 +13,8 @@ from scipy.interpolate import interp1d
 from pkg_resources import resource_filename
 from importlib.resources import files
 
+from pathlib import Path
+
 opj = os.path.join
 
 # ------------------------
@@ -32,8 +34,11 @@ NDWI_swir_threshold = [0.12, 2.]
 # ******************************************************************************************************
 dir, filename = os.path.split(__file__)
 
-sunglint_eps_file = files('grs.data.aux').joinpath('mean_rglint_small_angles_vza_le_12_sza_le_60.txt')
-rayleigh_file = files('grs.data.aux').joinpath('rayleigh_bodhaine.txt')
+
+location = Path(__file__).resolve().parent / "data" / "aux_files"
+
+sunglint_eps_file = location / "mean_rglint_small_angles_vza_le_12_sza_le_60.txt"
+rayleigh_file = location / "rayleigh_bodhaine.txt"
 
 
 class AuxData():

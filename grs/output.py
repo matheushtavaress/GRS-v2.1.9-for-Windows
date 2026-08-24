@@ -7,16 +7,6 @@ import xarray as xr
 import logging
 
 
-import importlib_resources
-import yaml
-
-configfile = importlib_resources.files(__package__) / 'config.yml'
-with open(configfile, 'r') as file:
-    config = yaml.safe_load(file)
-
-NETCDF_ENGINE = 'netcdf4' #config['processor']['netcdf_engine']
-
-
 class L2aProduct():
     '''
     Create and handle L2A object
@@ -100,7 +90,7 @@ class L2aProduct():
         self.ancillary.rio.write_coordinate_system(inplace=True)
         self.ancillary.rio.write_crs(inplace=True)
 
-    def export_to_netcdf(self, output_path, snap_compliant=False):
+    def to_netcdf(self, output_path, snap_compliant=False):
         '''
         Create output product dimensions, variables, attributes, flags....
 
@@ -185,11 +175,11 @@ class L2aProduct():
         # TODO check why or generalize the following approach:
         # fix for conflicts with attrs and encoding, needs to remove 'grid_mapping' from input attrs
         for var in self.l2_prod.keys():
-            if 'grid_mapping' in self.l2_prod[var].attrs:
-                del self.l2_prod[var].attrs['grid_mapping']
+            for param in ['grid_mapping','scale_factor','_FillValue','add_offset']:
+                if param in self.l2_prod[var].attrs:
+                    del self.l2_prod[var].attrs[param]
 
-        self.l2_prod.to_netcdf(ofile + '.nc',
-                               encoding=encoding, engine=NETCDF_ENGINE)
+        self.l2_prod.to_netcdf(ofile + '.nc', encoding=encoding)
 
         # self.l2_prod.close()
 
@@ -198,9 +188,7 @@ class L2aProduct():
         for variable in list(self.ancillary.keys()):
             encoding[variable] = {"zlib": True, "complevel": complevel, 'grid_mapping': 'spatial_ref'}
 
-        self.ancillary.to_netcdf(ofile + '_anc.nc', 'w',
-                                 encoding=encoding,
-                                 engine=NETCDF_ENGINE)  # ,group='ancillary')
+        self.ancillary.to_netcdf(ofile + '_anc.nc', 'w', encoding=encoding)  # ,group='ancillary')
 
         # self.ancillary.close()
 

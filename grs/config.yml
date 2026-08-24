@@ -1,10 +1,9 @@
 path:
-  grsdata: '/data/grs/grsdata'
+  grsdata: 'C:/Users/Matheus/Documents/grsdata'
   toa_lut: 'toa_lut_opac_wind_light_v2.nc'
   trans_lut: 'transmittance_lut_opac_wind_light_v2.nc'
-  cams: '/data/cams'
+  cams: '/work/datalake/watcal/cams'
 
 processor:
   ncpu: 8
   chunk: 512
-  netcdf_engine: 'h5netcdf'

@@ -2,18 +2,11 @@
 Module dedicated to handle CAMS data with link to Copernicus API.
 '''
 
-import os, sys
-
-import numpy as np
-import pandas
-from scipy.interpolate import interp1d
-import xarray as xr
+import os
 
 import matplotlib.pyplot as plt
-
-import logging
-import calendar, datetime
-import cdsapi
+import numpy as np
+import xarray as xr
 
 opj = os.path.join
 
@@ -137,7 +130,7 @@ class CamsProduct:
         '''
 
         # set geographic extents
-        xmin, ymin, xmax, ymax = self.prod.rio.bounds()
+        xmin, ymin, xmax, ymax = self.prod.rio.bounds(recalc=True)
         lonmin, latmin, lonmax, latmax = self.lonmin, self.latmin, self.lonmax, self.latmax
 
         if not os.path.exists(self.filepath):
@@ -240,7 +233,7 @@ class CamsProduct:
         return
 
     def plot_params(self, params=['amaod550', 'bcaod550', 'duaod550', 'niaod550',
-                                  'omaod550', 'ssaod550', 'suaod550',
+                                  'omaod550', 'ssaod550', 'soaod550', 'suaod550',
                                   'aod550',
                                   't2m', 'msl', 'sp',
                                   'tcco', 'tc_ch4', 'tcno2', 'gtco3',
@@ -248,7 +241,6 @@ class CamsProduct:
                     **kwargs):
         '''
         Function to plot the cams data extracted for date and region of interest.
-        Note that secondary organic aerosols optical thickness at 550 nm is not available for the whole timeserires (check parameter 'soaod550')
 
         :param params: parameters to plot
         :param kwargs: kwargs for matplotlib plotting

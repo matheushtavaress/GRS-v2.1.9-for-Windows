@@ -1,4 +1,6 @@
 import os
+from os import PathLike
+from pathlib import Path
 
 import importlib_resources
 import yaml
@@ -6,19 +8,21 @@ import yaml
 import numpy as np
 import xarray as xr
 
-# keep attributes through operatyion on xarray objects
+# keep attributes through operation on xarray objects
 xr.set_options(keep_attrs=True)
 import rioxarray as rio
 import logging
 import gc
 
-from multiprocessing import Pool  # Process pool
-from multiprocessing import sharedctypes
+import multiprocessing as mp
+from multiprocessing import shared_memory
+import psutil
 import itertools
 
 import GRSdriver
 
 from . import Product, acutils, AuxData, CamsProduct, L2aProduct, Masking, Rasterization
+from .grs_exceptions import GRS_IO_Exception
 
 opj = os.path.join
 
@@ -31,8 +35,290 @@ TOALUT = config['path']['toa_lut']
 TRANSLUT = config['path']['trans_lut']
 CAMS_PATH = config['path']['trans_lut']
 NCPU = config['processor']['ncpu']
-NETCDF_ENGINE = config['processor']['netcdf_engine']
 
+# Global state used by multiprocessing workers
+_WORKER_STATE = None
+_WORKER_SHM_RRS = None
+_WORKER_SHM_RF = None
+
+
+def init_worker(worker_state):
+    """
+    Initialize the state used by each multiprocessing worker.
+    """
+
+    global _WORKER_STATE
+    global _WORKER_SHM_RRS
+    global _WORKER_SHM_RF
+
+    _WORKER_STATE = worker_state
+
+    _WORKER_SHM_RRS = shared_memory.SharedMemory(
+        name=worker_state["shm_Rrs_name"]
+    )
+
+    _WORKER_SHM_RF = shared_memory.SharedMemory(
+        name=worker_state["shm_Rf_name"]
+    )
+
+
+def chunk_process(args):
+    """
+    Process one raster chunk.
+    """
+    iy, ix = args
+
+    state = _WORKER_STATE
+
+    height = state["height"]
+    width = state["width"]
+    prod = state["prod"]
+    monoview = state["monoview"]
+    _R_ = state["_R_"]
+
+    shared_Rrs = state["shared_Rrs"]
+    shared_Rf = state["shared_Rf"]
+
+    aot_ref_raster = state["aot_ref_raster"]
+    _pressure = state["_pressure"]
+    Tg_raster = state["Tg_raster"]
+    Tg_diff_raster = state["Tg_diff_raster"]
+
+    szas = state["szas"]
+    vzas = state["vzas"]
+    azis = state["azis"]
+    aot_refs = state["aot_refs"]
+
+    Rdiff_lut = state["Rdiff_lut"]
+    Rray = state["Rray"]
+
+    aot_lut = state["aot_lut"]
+
+    Ttot_Ed_ = state["Ttot_Ed_"]
+    Ttot_Lu_ = state["Ttot_Lu_"]
+
+    _sunglint_eps = state["_sunglint_eps"]
+    _rot = state["_rot"]
+
+    pressure_ref = state["pressure_ref"]
+    _sigma2 = state["_sigma2"]
+
+    prod_chunk = prod.chunk
+    yc = min(height, iy + prod_chunk)
+    xc = min(width, ix + prod_chunk)
+
+    Rrs_tmp = np.ndarray(
+        state["Rrs_shape"],
+        dtype=np.dtype(state["dtype"]),
+        buffer=_WORKER_SHM_RRS.buf
+    )
+
+    Rf_tmp = np.ndarray(
+        state["Rf_shape"],
+        dtype=np.dtype(state["dtype"]),
+        buffer=_WORKER_SHM_RF.buf
+    )
+
+    _band_rad = prod.raster.bands[:, iy:yc, ix:xc]
+
+    Nwl, Ny, Nx = _band_rad.shape
+
+    if Ny == 0 or Nx == 0:
+        return
+
+    arr_tmp = np.full(
+        (Nwl, Ny, Nx),
+        np.nan,
+        dtype=prod._type
+    )
+
+    # ------------------------------------------
+    # Angles
+    # ------------------------------------------
+
+    _sza = prod.raster.sza[iy:yc, ix:xc]
+
+    if monoview:
+        _raa = prod.raster.raa[iy:yc, ix:xc]
+        _vza = prod.raster.vza[iy:yc, ix:xc]
+        _vza_mean = _vza.values
+    else:
+        _raa = prod.raster.raa[:, iy:yc, ix:xc]
+        _vza = prod.raster.vza[:, iy:yc, ix:xc]
+        _vza_mean = np.mean(_vza, axis=0).values
+
+    _azi = (180. - _raa) % 360
+
+    _air_mass_ = acutils.Misc.air_mass(
+        _sza,
+        _vza
+    ).values
+
+    # Fix for bug with azimuth
+    _p_slope_ = 1.
+
+    # ------------------------------------------
+    # Atmospheric parameters
+    # ------------------------------------------
+
+    _aot_ref = aot_ref_raster.values[iy:yc, ix:xc]
+
+    _pressure_ = _pressure[iy:yc, ix:xc] / pressure_ref
+
+    _Tg_abs = Tg_raster[:, iy:yc, ix:xc].values
+    _Tg_abs_diff = Tg_diff_raster[:, iy:yc, ix:xc].values
+
+    # Rayleigh optical thickness
+    _rot_raster = _R_._multiplicate(
+        _rot,
+        _pressure_,
+        arr_tmp
+    )
+
+    # ------------------------------------------
+    # LUT interpolation
+    # ------------------------------------------
+
+    _Rdiff = _R_.interp_Rlut(
+        szas,
+        _sza.values,
+        vzas,
+        _vza.values,
+        azis,
+        _azi.values,
+        aot_refs,
+        _aot_ref,
+        Nwl,
+        Ny,
+        Nx,
+        Rdiff_lut.values
+    )
+
+    _Rray = _R_.interp_Rlut_rayleigh(
+        szas,
+        _sza.values,
+        vzas,
+        _vza.values,
+        azis,
+        _azi.values,
+        Nwl,
+        Ny,
+        Nx,
+        Rray.values
+    )
+
+    _Rdiff = _Rdiff * _Tg_abs_diff * _pressure_
+
+    _aot = _R_._interp_aotlut(
+        aot_lut.aot_ref.values,
+        _aot_ref,
+        Nwl,
+        Ny,
+        Nx,
+        aot_lut.values
+    )
+
+    # ------------------------------------------
+    # Atmospheric correction
+    # ------------------------------------------
+
+    Rcorr = _band_rad.values - _Rdiff
+
+    Tdir = acutils.Misc.transmittance_dir(
+        _aot,
+        _air_mass_,
+        _rot_raster
+    )
+
+    Tdown = _R_._interp_Tlut(
+        szas,
+        _sza.values,
+        Ttot_Ed_.aot_ref.values,
+        _aot_ref,
+        Nwl,
+        Ny,
+        Nx,
+        Ttot_Ed_.values
+    )
+
+    Tup = _R_._interp_Tlut(
+        vzas,
+        _vza_mean,
+        Ttot_Lu_.aot_ref.values,
+        _aot_ref,
+        Nwl,
+        Ny,
+        Nx,
+        Ttot_Lu_.values
+    )
+
+    Ttot_du = Tdown * Tup * _Tg_abs
+
+    # ------------------------------------------
+    # Sunglint
+    # ------------------------------------------
+
+    Rf = np.full(
+        (len(prod.iwl_swir), Ny, Nx),
+        np.nan,
+        dtype=prod._type
+    )
+
+    for iwl in prod.iwl_swir:
+
+        if monoview:
+            Rf[iwl] = (
+                Rcorr[iwl]
+                / (
+                    Tdir[iwl]
+                    * _Tg_abs[iwl]
+                    * _sunglint_eps[iwl]
+                    * _p_slope_
+                )
+            )
+        else:
+            Rf[iwl] = (
+                _sunglint_eps[-1]
+                * Rcorr[iwl]
+                / (
+                    Tdir[iwl]
+                    * _Tg_abs[iwl]
+                    * _sunglint_eps[iwl]
+                )
+            )
+
+    Rf[Rf < 0] = 0.
+    Rf = np.min(Rf, axis=0)
+
+    Rf_tmp[iy:yc, ix:xc] = Rf
+
+    Rf = _R_._multiplicate(
+        _sunglint_eps,
+        Rf,
+        arr_tmp
+    )
+
+    Rf = (
+        _Tg_abs
+        * Tdir
+        * Rf
+        / _sunglint_eps[-1]
+    )
+
+    # ------------------------------------------
+    # Sunglint removal
+    # ------------------------------------------
+
+    Rrs_tmp_ = (Rcorr - Rf) / np.pi
+
+    # Convert TOA to BOA for positive values
+    Ttot_du[Rrs_tmp_ < 0] = 1.
+
+    Rrs_tmp_ = Rrs_tmp_ / Ttot_du
+
+    Rrs_tmp[:, iy:yc, ix:xc] = Rrs_tmp_
+
+    return
 
 class Process:
     '''
@@ -47,11 +333,10 @@ class Process:
         self.Nproc = NCPU
         self.pressure_ref = 101500.
         self.flags_tokeep = [3]
-        self.flags_tomask = [0, 1, 10, 13, 14, 18]
-        self.successful = False
+        self.flags_tomask = [0,1,10,13,14,18]
 
     def execute(self, l1c_prod,
-                ofile='',
+                odir='',
                 cams_file=None,
                 surfwater_file=None,
                 dem_file=None,
@@ -66,7 +351,7 @@ class Process:
         Main program calling all GRS steps
 
         :param l1c_prod: xarray L1C object or L1C input file (path) to be processed
-        :param ofile: Absolute path of the output file
+        :param odir: Absolute path of the output directory
         :param cams_file: Absolute path for root directory of CAMS data
         :param surfwater_file: Absolute path the surfwater file (.tif)
         :param dem_file: Absolute path of the DEM geotiff file
@@ -155,32 +440,34 @@ class Process:
         You can either further play with the l2a xarray or save it into netcdf:
 
 
-        >>> process_.ofile='./name_of_your_output_l2a_netcdf'
+        >>> process_.odir='./name_of_your_output_l2a_netcdf_directory'
         >>> process_.write_output()
         INFO:root:export final product into netcdf
         INFO:root:export into encoded netcdf
 
         '''
 
-        self.ofile = ofile
+        self.odir = odir
         self.snap_compliant = snap_compliant
-        self.successful = False
 
         ##################################
         # Get image data
         ##################################
-        if isinstance(l1c_prod, str):
+        if isinstance(l1c_prod, str | PathLike):
             # get extension
-            extension = l1c_prod.split('.')[-1]
-            basename = os.path.basename(l1c_prod)
-            if extension == 'nc':
+            extension = Path(l1c_prod).suffix
+            basename = Path(l1c_prod).stem
+            if 'nc' in extension:
                 logging.info('pass netcdf image as grs product object')
-                prod = Product(xr.open_dataset(l1c_prod), engine=NETCDF_ENGINE)
+                prod = Product(xr.open_dataset(l1c_prod))
             elif 'SAFE' in extension:
                 logging.info('Open L1C Sentinel 2 image and compute angle parameters')
                 global l1c
-                l1c = GRSdriver.Sentinel2Driver(l1c_prod, resolution=resolution)
-                l1c.load_product()
+                try:
+                    l1c = GRSdriver.Sentinel2Driver(l1c_prod, resolution=resolution)
+                    l1c.load_product()
+                except Exception as exc:
+                    raise GRS_IO_Exception(l1c_prod, exc)
                 logging.info('pass raw image as grs product object')
                 prod = Product(l1c.prod)
                 # clear memory (TODO make it work!!)
@@ -188,10 +475,12 @@ class Process:
                 gc.collect()
             elif ('LC09_L1' in basename) or ('LC08_L1' in basename):
                 logging.info('Open L1TP Landsat image')
-
-                l1c = GRSdriver.LandsatDriver(l1c_prod, resolution=resolution)
-                l1c.load_mask()
-                l1c.load_product()
+                try:
+                    l1c = GRSdriver.LandsatDriver(l1c_prod, resolution=resolution)
+                    l1c.load_mask()
+                    l1c.load_product()
+                except Exception as exc:
+                    raise GRS_IO_Exception(l1c_prod, exc)
                 logging.info('pass raw image as grs product object')
                 prod = Product(l1c.prod)
                 # clear memory (TODO make it work!!)
@@ -203,9 +492,9 @@ class Process:
         elif isinstance(l1c_prod, xr.Dataset):
             try:
                 prod = Product(l1c_prod)
-            except:
+            except Exception as exc:
                 logging.info('input file format not recognized, stop')
-                return
+                raise GRS_IO_Exception(l1c_prod, exc)
 
         self.prod = prod
 
@@ -224,20 +513,23 @@ class Process:
         # GET ANCILLARY DATA (Pressure, O3, water vapor, NO2...
         ##################################
         logging.info('get CAMS auxilliary data')
-        if cams_file:
-            cams = CamsProduct(prod.raster, cams_file=cams_file)
-        else:
-            tile = prod.raster.attrs['tile']
-            cams_dir = os.path.join(self.cams_dir, tile)
-            cams = CamsProduct(prod.raster, dir=cams_dir, suffix='_' + tile)
-        cams.load(daily_stats=False)
+        try:
+            if cams_file:
+                cams = CamsProduct(prod.raster, cams_file=cams_file)
+            else:
+                tile = prod.raster.attrs['tile']
+                cams_dir = os.path.join(self.cams_dir, tile)
+                cams = CamsProduct(prod.raster, dir=cams_dir, suffix='_' + tile)
+            cams.load()
+        except Exception as exc:
+            raise GRS_IO_Exception(cams_file, exc)
 
         # Cox-Munk isotropic mean square slope (sigma2)
-        wind = np.sqrt(cams.raster['v10'] ** 2 + cams.raster['u10'] ** 2) * 2
+        wind = np.sqrt(cams.raster['v10'] ** 2 + cams.raster['u10'] ** 2)
         sigma2 = (wind + 0.586) / 195.3
 
         # get mean values to set LUT
-        _sigma2 = sigma2.median().values
+        _sigma2 = sigma2.mean().values
         _wind = wind.mean().values
 
         ##################################
@@ -247,15 +539,18 @@ class Process:
         logging.info('flagging from l1c data')
 
         if surfwater_file:
-            logging.info('loading surfwater data file')
-            prod.raster['surfwater'] = rio.open_rasterio(surfwater_file
-                                                         ).astype(np.uint8
-                                                                  ).squeeze().interp(x=prod.x,
-                                                                                     y=prod.y,
-                                                                                     method='nearest')
-            prod.raster.surfwater.name = 'surfwater'
-            prod.raster.surfwater.attrs = {
-                'description': 'surfwater file not provided as input, all pixels flagged as water (e.g., surfwater=1)'}
+            try:
+                logging.info('loading surfwater data file')
+                prod.raster['surfwater'] = rio.open_rasterio(surfwater_file
+                                                             ).astype(np.uint8
+                                                                      ).squeeze().interp(x=prod.x,
+                                                                                         y=prod.y,
+                                                                                         method='nearest')
+                prod.raster.surfwater.name = 'surfwater'
+                prod.raster.surfwater.attrs = {
+                    'description': 'surfwater file not provided as input, all pixels flagged as water (e.g., surfwater=1)'}
+            except Exception as exc:
+                raise GRS_IO_Exception(surfwater_file, exc)
 
         masking_ = Masking(prod.raster)
         prod.raster = masking_.process(output="prod")
@@ -273,6 +568,8 @@ class Process:
             prod.wv = prod.raster.bands.sel(wl=prod.bwv, method='nearest')
 
         prod.raster = prod.raster.sel(wl=prod.wl_process, method='nearest')
+
+        # get true central wavelength for the bands to process
         wl_true = prod.raster.wl_true
 
         ##################################
@@ -285,13 +582,18 @@ class Process:
         # LOAD LUT FOR ATMOSPHERIC CORRECTION
         #####################################
         logging.info('loading look-up tables')
-        Ttot_Ed = xr.open_dataset(self.trans_lut_file, engine=NETCDF_ENGINE)
+        try:
+            Ttot_Ed = xr.open_dataset(self.trans_lut_file)
+        except Exception as exc:
+            raise GRS_IO_Exception(self.trans_lut_file, exc)
         Ttot_Ed['wl'] = Ttot_Ed['wl'] * 1000
 
-        aero_lut = xr.open_dataset(self.lut_file, engine=NETCDF_ENGINE)
+        try:
+            aero_lut = xr.open_dataset(self.lut_file)
+        except Exception as exc:
+            raise GRS_IO_Exception(self.lut_file, exc)
         aero_lut['wl'] = aero_lut['wl'] * 1000
         aero_lut['aot'] = aero_lut.aot.isel(wind=0).squeeze()
-        aero_lut['aaot'] = aero_lut['aot'] * (1 - aero_lut.ssa.isel(wind=0).squeeze())
 
         # remove URBAN aerosol model for this example
         models = aero_lut.drop_sel(model='URBA_rh70').model.values
@@ -304,17 +606,19 @@ class Process:
         #    absorbing gases correction
         ####################################
         logging.info('compute gaseous transmittance from cams data')
-
-        gas_trans = acutils.GaseousTransmittance(prod, cams)
-        gases = ['co2', 'o2', 'o4', 'ch4', 'no2', 'o3', 'h2o']
-        for gas in gases:
-            gas_trans.coef_abs_scat[gas] = 1
-        Tg_raster = gas_trans.get_gaseous_transmittance(gases=['o3', 'no2'])
+        try:
+            gas_trans = acutils.GaseousTransmittance(prod, cams)
+            gases = ['co2', 'o2', 'o4', 'ch4', 'no2', 'o3', 'h2o']
+            for gas in gases:
+                gas_trans.coef_abs_scat[gas] = 1
+            Tg_raster = gas_trans.get_gaseous_transmittance(gases=['o3', 'no2'])
+        except Exception as exc:
+            raise GRS_IO_Exception(cams_file, exc)
 
         logging.info('correct for gaseous absorption')
         for wl in prod.raster.wl.values:
             prod.raster['bands'].loc[wl] = prod.raster.bands.sel(wl=wl) / Tg_raster.sel(wl=wl).interp(x=prod.raster.x,
-                                                                 y=prod.raster.y)
+                                                                                                      y=prod.raster.y)
         prod.raster.bands.attrs['gas_absorption_correction'] = True
 
         ######################################
@@ -349,10 +653,12 @@ class Process:
             prod.raster['bands'] = masked
             prod.raster['sza'] = prod.raster['sza'].where(mask)
 
+            # TODO @Thales check if it is in agreement with your policy (here stop if no water pixel and return empty object)
             # stop process if no valid (water) pixel available
-            if np.isnan(prod.raster['sza'].values).all():
-                logging.info('no water pixels, stop process')
-                return
+            #if np.isnan(prod.raster['sza'].values).all():
+            #    logging.info('no water pixels, stop process')
+            #    return
+            # END TODO
 
         ######################################
         # LUT preparation
@@ -414,8 +720,6 @@ class Process:
         aot_ref_max = aot_ref_raster.max()
         aot_lut = aero_lut_.aot.interp(wl=wl_true, method='quadratic')
         aot_lut = aot_lut.interp(aot_ref=np.linspace(aot_ref_min, aot_ref_max.values, 1000))  # .plot(hue='wl')
-        aaot_lut = aero_lut_.aaot.interp(wl=wl_true, method='quadratic')
-        aaot_lut = aaot_lut.interp(aot_ref=np.linspace(aot_ref_min, aot_ref_max.values, 1000))
 
         Rdiff_lut = aero_lut_.I.sel(sza=sza_slice,
                                     vza=vza_slice
@@ -425,7 +729,7 @@ class Process:
         Rdiff_lut = Rdiff_lut.interp(sza=sza_, vza=vza_)
         Rray = Rdiff_lut.sel(aot_ref=0)
         Rdiff_lut = Rdiff_lut.interp(aot_ref=[0, 0.02, 0.05, 0.07, *aot_ref_],
-                                     method='quadratic') #.sortby("aot_ref")
+                                     method='quadratic')  # .sortby("aot_ref")
 
         szas = Rdiff_lut.sza.values
         vzas = Rdiff_lut.vza.values
@@ -450,17 +754,14 @@ class Process:
         _sunglint_eps = sunglint_eps.values
 
         # prepare aerosol parameters
-        aot_ref_raster = aot_ref_raster.interp(x=prod.raster.x,
-                                               y=prod.raster.y).drop('wl').astype(np.float32)
+        aot_ref_raster = aot_ref_raster.interp(x=prod.raster.x, y=prod.raster.y).drop('wl').astype(np.float32)
         aot_ref_raster.name = 'aot550'
         _rot = rot.values
 
         # _aot = aot_lut.interp(aot_ref=_aot_ref)
         if dem_file:
             logging.info('compute surface pressure from dem')
-            dem = xr.open_dataset(dem_file).squeeze().interp(y=prod.raster.y,
-                                                             x=prod.raster.x,
-                                                             method='nearest')
+            dem = xr.open_dataset(dem_file).squeeze().interp(y=prod.raster.y, x=prod.raster.x, method='nearest')
             dem = dem.rename_vars({'band_data': 'dem'})
             dem.dem.attrs['long_name'] = 'digital elevation model'
             dem.dem.attrs['units'] = 'm'
@@ -478,8 +779,9 @@ class Process:
         gas_trans = acutils.GaseousTransmittance(prod, cams)
         # set total transmittance values
         gas_trans.coef_abs_scat['h2o'] = 0.5
-        gas_trans.coef_abs_scat['ch4'] = 0.65
-        Tg_diff_raster = gas_trans.get_gaseous_transmittance(gases=gases, background=False).transpose("wl", "y", "x")
+        gas_trans.coef_abs_scat['ch4'] = 0.5
+        Tg_diff_raster = gas_trans.get_gaseous_transmittance(gases=gases, background=False).transpose("wl", "y",
+                                                                                                      "x")
         Tg_diff_raster = Tg_diff_raster.interp(x=prod.raster.x, y=prod.raster.y)
 
         # set total transmittance values
@@ -492,127 +794,160 @@ class Process:
         # Run grs processing
         ######################################
         logging.info('run grs process')
-        global chunk_process
-        Rrs_result = np.ctypeslib.as_ctypes(np.full((Nwl, height, width), np.nan, dtype=prod._type))
-        Rf_result = np.ctypeslib.as_ctypes(np.full((height, width), np.nan, dtype=prod._type))
-        shared_Rrs = sharedctypes.RawArray(Rrs_result._type_, Rrs_result)
-        shared_Rf = sharedctypes.RawArray(Rf_result._type_, Rf_result)
 
-        def chunk_process(args):
-            iy, ix = args
-            yc = min(height, iy + prod.chunk)
-            xc = min(width, ix + prod.chunk)
-            Rrs_tmp = np.ctypeslib.as_array(shared_Rrs)
-            Rf_tmp = np.ctypeslib.as_array(shared_Rf)
+        # -------------------------------------------------------------
+        # Multiprocessing
+        # -------------------------------------------------------------
 
-            _band_rad = prod.raster.bands[:, iy:yc, ix:xc]
+        Nwl = len(prod.raster.wl_to_process)
 
-            Nwl, Ny, Nx = _band_rad.shape
-            if Ny == 0 or Nx == 0:
-                return
-            arr_tmp = np.full((Nwl, Ny, Nx), np.nan, dtype=prod._type)
+        # Determine the number of physical CPU cores.
+        # Fall back to logical CPUs if physical count is unavailable.
+        physical_cpus = psutil.cpu_count(logical=False)
+        logical_cpus = psutil.cpu_count(logical=True)
 
-            # subsetting
-            _sza = prod.raster.sza[iy:yc, ix:xc]  # .values
-            if monoview:
-                _raa = prod.raster.raa[iy:yc, ix:xc]
-                _vza = prod.raster.vza[iy:yc, ix:xc]
-                _vza_mean = _vza.values
-            else:
-                _raa = prod.raster.raa[:, iy:yc, ix:xc]
-                _vza = prod.raster.vza[:, iy:yc, ix:xc]
-                _vza_mean = np.mean(_vza, axis=0).values
+        if physical_cpus is None:
+            physical_cpus = logical_cpus
 
-            _azi = (180. - _raa) % 360
-            _air_mass_ = acutils.Misc.air_mass(_sza, _vza).values
-            _p_slope_ = prod.p_slope(_sza, _vza, _raa, sigma2=_sigma2, monoview=monoview).values
-            _aot_ref = aot_ref_raster.values[iy:yc, ix:xc]
-            _pressure_ = _pressure[iy:yc, ix:xc] / pressure_ref
-            _Tg_abs = Tg_raster[:, iy:yc, ix:xc].values
-            _Tg_abs_diff = Tg_diff_raster[:, iy:yc, ix:xc].values
+        if physical_cpus is None:
+            physical_cpus = 1
 
-            # construct wl,y,x raster for Rayleigh optical thickness
-            _rot_raster = _R_._multiplicate(_rot, _pressure_, arr_tmp)
+        # Respect the value configured by the user, but don't exceed
+        # the number of available physical CPUs.
+        nproc = min(self.Nproc, physical_cpus)
 
-            # get LUT values
-            _Rdiff = _R_.interp_Rlut(szas, _sza.values,
-                                     vzas, _vza.values,
-                                     azis, _azi.values,
-                                     aot_refs, _aot_ref,
-                                     Nwl, Ny, Nx, Rdiff_lut.values)
+        logging.info(
+            "using %d multiprocessing workers "
+            "(physical CPUs: %s, logical CPUs: %s)",
+            nproc,
+            physical_cpus,
+            logical_cpus
+        )
 
-            _Rray = _R_.interp_Rlut_rayleigh(szas, _sza.values,
-                                             vzas, _vza.values,
-                                             azis, _azi.values,
-                                             Nwl, Ny, Nx, Rray.values)
+        # -------------------------------------------------------------
+        # Result arrays
+        # -------------------------------------------------------------
 
-            # _Rdiff = _Rdiff + (_pressure_ - 1) * _Rray
-            _Rdiff = _Rdiff * _Tg_abs_diff * _pressure_
+        Rrs_size = Nwl * height * width
+        Rf_size = height * width
 
-            _aot = _R_._interp_aotlut(aot_lut.aot_ref.values, _aot_ref, Nwl, Ny, Nx, aot_lut.values)
+        shm_Rrs = shared_memory.SharedMemory(
+            create=True,
+            size=Rrs_size * np.dtype(prod._type).itemsize
+        )
 
-            #  correction for diffuse light
-            Rcorr = _band_rad.values - _Rdiff
+        shm_Rf = shared_memory.SharedMemory(
+            create=True,
+            size=Rf_size * np.dtype(prod._type).itemsize
+        )
 
-            # direct transmittance up/down
-            Tdir = acutils.Misc.transmittance_dir(_aot, _air_mass_, _rot_raster)
+        Rrs_result = np.ndarray(
+            (Nwl, height, width),
+            dtype=prod._type,
+            buffer=shm_Rrs.buf
+        )
 
-            # vTotal transmittance (for Ed and Lu)
-            Tdown = _R_._interp_Tlut(szas, _sza.values, Ttot_Ed_.aot_ref.values, _aot_ref, Nwl, Ny, Nx,
-                                     Ttot_Ed_.values)
-            Tup = _R_._interp_Tlut(vzas, _vza_mean, Ttot_Ed_.aot_ref.values, _aot_ref, Nwl, Ny, Nx, Ttot_Lu_.values)
-            Ttot_du = Tdown * Tup * _Tg_abs
+        Rf_result = np.ndarray(
+            (height, width),
+            dtype=prod._type,
+            buffer=shm_Rf.buf
+        )
 
-            Rf = np.full((len(prod.iwl_swir), Ny, Nx), np.nan, dtype=prod._type)
+        # -------------------------------------------------------------
+        # Worker state
+        # -------------------------------------------------------------
 
-            for iwl in prod.iwl_swir:
+        worker_state = {
+            "height": height,
+            "width": width,
 
-                if monoview:
-                    Rf[iwl] = Rcorr[iwl] / (Tdir[iwl] * _Tg_abs[iwl] * _sunglint_eps[iwl] * _p_slope_)
-                else:
-                    Rf[iwl] = (_sunglint_eps[-1] * _p_slope_[-1] * Rcorr[iwl] /
-                                (Tdir[iwl] * _Tg_abs[iwl] * _sunglint_eps[iwl] * _p_slope_[iwl]))
+            "prod": prod,
+            "_R_": _R_,
+            "monoview": monoview,
 
-            Rf[Rf < 0] = 0.
-            Rf = np.min(Rf, axis=0)
-            Rf_tmp[iy:yc, ix:xc] = Rf
+            "shared_Rrs": Rrs_result,
+            "shared_Rf": Rf_result,
 
-            Rf = _R_._multiplicate(_sunglint_eps, Rf, arr_tmp)
-            Rf = _Tg_abs * Tdir * Rf * _p_slope_ / (_sunglint_eps[-1] * _p_slope_[-1])
+            "aot_ref_raster": aot_ref_raster,
+            "_pressure": _pressure,
 
-            # sunglint removal
-            #Rrs_tmp_ =Rcorr / np.pi# Rrs_tmp[:, iy:yc, ix:xc]
-            Rrs_tmp_ = ((Rcorr - Rf) / np.pi)
+            "Tg_raster": Tg_raster,
+            "Tg_diff_raster": Tg_diff_raster,
 
-            # Convert from TOA to BOA for positive values
-            Ttot_du[Rrs_tmp_ < 0] = 1.
-            Rrs_tmp_ = Rrs_tmp_ / Ttot_du
-            Rrs_tmp[:, iy:yc, ix:xc] = Rrs_tmp_
-            return
+            "szas": szas,
+            "vzas": vzas,
+            "azis": azis,
+            "aot_refs": aot_refs,
 
-        window_idxs = [(i, j) for i, j in
-                       itertools.product(range(0, height, prod.chunk),
-                                         range(0, width, prod.chunk))]
+            "Rdiff_lut": Rdiff_lut,
+            "Rray": Rray,
+            "aot_lut": aot_lut,
 
-        global pool
-        pool = Pool(self.Nproc)
-        res = pool.map(chunk_process, window_idxs)
-        pool.terminate()
-        pool = None
-        logging.info('success')
+            "Ttot_Ed_": Ttot_Ed_,
+            "Ttot_Lu_": Ttot_Lu_,
 
-        ######################################
-        # construct l2a object
-        ######################################
+            "_sunglint_eps": _sunglint_eps,
+            "_rot": _rot,
+
+            "pressure_ref": pressure_ref,
+            "_sigma2": _sigma2,
+
+            "shm_Rrs_name": shm_Rrs.name,
+            "shm_Rf_name": shm_Rf.name,
+            "Rrs_shape": Rrs_result.shape,
+            "Rf_shape": Rf_result.shape,
+            "dtype": str(prod._type),
+        }
+
+        # -------------------------------------------------------------
+        # Create processing windows
+        # -------------------------------------------------------------
+
+        window_idxs = [
+            (iy, ix)
+            for iy, ix in itertools.product(
+                range(0, height, prod.chunk),
+                range(0, width, prod.chunk)
+            )
+        ]
+
+        # -------------------------------------------------------------
+        # Start multiprocessing
+        # -------------------------------------------------------------
+
+        ctx = mp.get_context("spawn")
+
+        with ctx.Pool(
+                processes=nproc,
+                initializer=init_worker,
+                initargs=(worker_state,)
+        ) as pool:
+
+            pool.map(
+                chunk_process,
+                window_idxs
+            )
+
         logging.info('construct final product')
-        self.aot_ref_raster = aot_ref_raster
-        l2_prod = xr.Dataset(dict(Rrs=(['wl', "y", "x"], np.ctypeslib.as_array(shared_Rrs)),
-                                  BRDFg=(["y", "x"], np.ctypeslib.as_array(shared_Rf)),
-                                  aot550=(["y", "x"], aot_ref_raster.values)),
-                             coords=dict(wl=prod.raster.wl,
-                                         x=prod.raster.x,
-                                         y=prod.raster.y),
-                             )
+
+        # -------------------------------------------------------------
+        # Construct final xarray object
+        # -------------------------------------------------------------
+
+        l2_prod = xr.Dataset(
+            {
+                "Rrs": (["wl", "y", "x"], Rrs_result),
+                "BRDFg": (["y", "x"], Rf_result),
+                "aot550": (["y", "x"], aot_ref_raster.values),
+            },
+            coords={
+                "wl": prod.raster.wl,
+                "x": prod.raster.x,
+                "y": prod.raster.y,
+            },
+        )
+
+        logging.info('success')
 
         l2_prod['central_wavelength'] = ('wl', prod.raster.wl_true.values)
         l2_prod = l2_prod.set_coords('central_wavelength')
@@ -638,14 +973,18 @@ class Process:
         ######################################
         # Write final product
         ######################################
-        logging.info('construct final product')
-        # self.l2_prod = l2_prod
+        self.l2_prod = l2_prod
         self.l2a = L2aProduct(prod, l2_prod, cams, gas_trans, dem)
-        del prod, l2_prod, cams, gas_trans, dem
-        self.successful = True
+
+        shm_Rrs.close()
+        shm_Rrs.unlink()
+
+        shm_Rf.close()
+        shm_Rf.unlink()
+
         return
 
     def write_output(self):
         logging.info('export final product into netcdf')
-        self.l2a.export_to_netcdf(self.ofile,
-                                  snap_compliant=self.snap_compliant)
+        self.l2a.to_netcdf(self.odir,
+                           snap_compliant=self.snap_compliant)
