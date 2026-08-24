@@ -1,174 +1,146 @@
+from grs import class_logger
+from grs import __version__
+from grs.grs_process import Process
 from pathlib import Path
 import yaml
-import sys, os
-import netCDF4 as nc
-import geopandas as gpd
+import sys
 import logging
-from logging.handlers import RotatingFileHandler
+from datetime import datetime
+from osgeo import gdal
 
-sys.path.extend([os.path.abspath(__file__)])
-from procutils import misc
-misc=misc()
+from exe.procutils import misc
 
-def rename_file(file, outfile, outdir):
+misc = misc()
 
-    if outfile == None:
-        basename=os.path.basename(file)
-        outfile = basename.replace('L1C', "L2GRS")
-        outfile = outfile.replace('.SAFE', '').rstrip('/')
-        outfile = outfile.replace('.zip', '').rstrip('/')
-        outfile = outfile.replace('L1TP', "L2GRS")
-        outfile = outfile.replace('.txt', '').rstrip('/')
 
-    if outdir is None:
-        return outfile
+def main():
+    # read config and prepare environment
+    if len(sys.argv) > 1:
+        config_file = sys.argv[1]
     else:
-        return os.path.join(outdir, outfile)
-
-def shp2wkt(shapefile):
-    logging.info(f'{shapefile} is used')
-    tmp = gpd.GeoDataFrame.from_file(shapefile)
-    return tmp.geometry.to_wkt().values[0]
-
-if __name__ == '__main__':
-
-    #read config and prepare environment
-    if(len(sys.argv)>1):
-        config_file=sys.argv[1]
-    else:
-        config_file="/app/grs/exe/global_config.yml"
+        config_file = "/home/grs2/exe/global_config.yml"
 
     with open(config_file, 'r') as yamlfile:
         data = yaml.load(yamlfile, Loader=yaml.FullLoader)
 
-    try:
-        if not os.path.islink("/tmp/grs/.snap/auxdata/dem"):
-            import shutil
-            print("removing /tmp/grs/.snap/auxdata/dem ...")
-            shutil.rmtree("/tmp/grs/.snap/auxdata/dem")
-        else:
-            os.symlink(data['auxdata_path']+"/dem", "/tmp/grs/.snap/auxdata/dem")
-    except Exception as error:
-        logging.debug(error)
-        logging.debug("check the symbolic link from "+data['auxdata_path']+"to /tmp/grs/.snap/auxdata/dem")
-
-    os.environ['DATA_ROOT'] = data['data_root']
-    os.environ['CAMS_PATH'] = data['cams_folder']
-
-    from grs import grs_process
-    from logging.handlers import RotatingFileHandler
-
     # file handle
-    logger = logging.getLogger()
-    file_handler = RotatingFileHandler(data['logfile'], 'a', 1000000, 1)
-    formatter = logging.Formatter(fmt='%(asctime)s.%(msecs)03d    %(levelname)s:%(filename)s::%(funcName)s:%(message)s', datefmt='%Y-%m-%dT%H:%M:%S')
+    logfile = Path(data['logfile'])
+    log_folder = logfile.parent
+    logfile.parent.mkdir(parents=True, exist_ok=True)
+    class_logger.ServiceLogger(log_file=logfile, error_log=Path(log_folder, "error.log"), log_level=data['level'],
+                               log_console=True)
 
-    level = logging.getLevelName(data['level'])
-    file_handler.setLevel(level)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-
-    logging.info("dem is existing" + str(os.path.exists("/tmp/grs/.snap/auxdata/dem")))
-    logging.debug("dem is a link :" + str(os.path.islink("/tmp/grs/.snap/auxdata/dem")))
-
-    os.environ['DATA_ROOT'] = data['data_root']
-    os.environ['CAMS_PATH'] = data['cams_folder']
-
-    from grs import grs_process
-
-    try:
-        if data['activate_dem']:
-            if os.path.exists("/tmp/grs/.snap/auxdata/dem") and not os.path.islink("/tmp/grs/.snap/auxdata/dem"):
-                import shutil
-                logging.info("removing /tmp/grs/.snap/auxdata/dem ...")
-                shutil.rmtree("/tmp/grs/.snap/auxdata/dem")
-            os.symlink(data['dem_path'], "/tmp/grs/.snap/auxdata/dem")
-    except Exception as error:
-        logging.debug(error)
-
-    #from grs import grs_process
-
+    # get all config
     with open(data['hymotep_config'], 'r') as config_file:
         data.update(yaml.load(config_file, Loader=yaml.FullLoader))
 
     for key, value in data.items():
-        if(value is not None and value!=''):
-            data[key]=value 
+        if value is not None and value != '':
+            data[key] = value
         else:
-            data[key]=None
-    file = data["input_file"]
- 
-    if data["shapefile"] != None:
-        wkt = shp2wkt(data["shapefile"])
+            data[key] = None
+    file = Path(data["input_file"])
+
+    if not file.exists():
+        logging.error("Missing input file. Process stopped")
+        exit(-1)
+    if not data["cams_folder"]:
+        logging.error("Missing CAMS folder. Process stopped")
+        exit(-1)
+
+    input_filename = file.name
+
+    # Get CAMS file
+    if Path(data['cams_folder']).is_file():
+        cams_file = Path(data['cams_folder'])
     else:
-        lonmin, lonmax = -180, 180
-        latmin, latmax = -90,90#-21.13
-        wkt = "POLYGON((" + str(lonmax) + " " + str(latmax) + "," + str(lonmax) + " " + str(latmin) + "," + str(lonmin) + " " + str(latmin) + "," + str(lonmin) + " " + str(latmax) + "," + str(lonmax) + " " + str(latmax) + "))"
-    
-    unzip = False
-    if os.path.splitext(file)[-1] == '.zip':
-        unzip = True
-    
-    untar = False
-    if os.path.splitext(file)[-1] == '.tar':
-        unzip = True 
-        
-    dem=False
-    if data["dem"]:
-        dem=True
+        input_date = datetime.strptime(input_filename.split("_")[2], '%Y%m%dT%H%M%S').date()
+        year = input_date.strftime('%Y')
+        month = input_date.strftime('%m')
+        day = input_date.strftime('%d')
+        logging.info('Search for the daily CAMS file')
+        cams_file = Path(data['cams_folder'], year, month, day,
+                         input_date.strftime('%Y-%m-%d') + '-cams-global-atmospheric-composition-forecasts.nc')
+        if not cams_file.exists():
+            logging.info('No daily CAMS file found. Search for the monthly one')
+            cams_file = Path(data['cams_folder'], year,
+                             input_date.strftime('%Y-%m') + '_month_cams-global-atmospheric-composition-forecasts.nc')
+    logging.info(f'CAMS file : {cams_file}')
 
-    waterdetect_only=False
-    if data["waterdetect_only"]:
-        waterdetect_only=True
-
-    basename = os.path.basename(file)
-    if 'incomplete' in basename:
+    # Verify existence of inputs
+    if not file.is_dir():
+        logging.error("Input file doesn't exit. Process stopped")
         exit(-1)
 
-    suffix='_'+str(data["chain_version"])+"_"+str(data["product_counter"])
-    
-    outfile = misc.set_ofile(file.split("/")[-1], odir=data['output_dir'], level_name='l2grs', suffix=suffix)
-    
-    # skip if already processed (the .dim exists)
-    if os.path.isfile(outfile + ".dim") & data["noclobber"]:
-        logger.info('File ' + outfile + ' already processed; skip!')
-        exit(-1)
-    # skip if incomplete (enables multiprocess)
-    if os.path.isfile(outfile + ".incomplete"):
-        logger.info('found incomplete File ' + outfile + '; skip!')
+    if not cams_file.is_file():
+        logging.error("CAMS file doesn't exit. Process stopped")
         exit(-1)
 
-    if os.path.isfile(outfile+".nc") & data["noclobber"]:
-        logger.info('File ' + outfile + ' already processed; skip!')
+    if data["surfwater_file"] and not Path(data["surfwater_file"]).is_file():
+        logging.error("SurfWater file doesn't exit. Process stopped")
         exit(-1)
-   
-    checksum = outfile+'.checksum'
-    startrow=0
+
+    # prepare outfile
+    suffix = data["suffix"]
+    if not suffix:
+        suffix = f'_V{__version__}'
+
+    output_dir = Path(data['output_dir'])
+
+    outdir = misc.set_ofile(input_filename, odir=output_dir, level_name='L2AGRS', suffix=suffix)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    outfile = Path(outdir,  f"{outdir.name}.nc")
+
+    # skip if already processed
+    if Path(outfile).is_file() & data["noclobber"]:
+        logging.info(f'File {outfile} already processed; skip!')
+        exit(-1)
+
+    logging.info(f'call grs_process for the following parameters. '
+                 f'File: {file} , '
+                 f'output idirectory:  {outdir} , '
+                 f'cams_file:  {cams_file} , '
+                 f'surfwater_file: {data["surfwater_file"]} , '
+                 f'resolution: {data["resolution"]} , '
+                 f'allpixels: {data["allpixels"]} , '
+                 f'snap_compliant: {data["snap_compliant"]})')
+
+    # first check cloud cover (for S2, not implemented for Landsat)
+    if 'MSIL1C' in input_filename:
+        max_cc = data["max_cloud_cover"]
+        f_ = gdal.Open(Path(file, 'MTD_MSIL1C.xml'))
+        metadata = f_.GetMetadata()
+        cc = float(metadata['CLOUD_COVERAGE_ASSESSMENT']) / 100
+        if cc >= max_cc:
+            logging.info('input file not processed since cloud cover {:.3f} is greater than {:.3f}'.format(cc, max_cc))
+            return
+
     try:
-      with open(checksum) as f:
-          checkdata = f.read().splitlines()
-      for s in checkdata:
-          ss=s.split()
-          if ss[0]=='startrow':
-              startrow=int(ss[1])
-    except:
-       pass
+        process_ = Process()
+        process_.execute(file,
+                         odir=outdir,
+                         cams_file=cams_file,
+                         resolution=data["resolution"],
+                         scale_aot=data["scale_aot"],
+                         opac_model=data["opac_model"],
+                         dem_file=data["dem_file"],
+                         allpixels=data["allpixels"],
+                         surfwater_file=data["surfwater_file"],
+                         snap_compliant=data["snap_compliant"])
+        process_.write_output()
 
-    try:
-        grs_process.Process().execute(l1c_prod=file, outfile=outfile, wkt=wkt,
-                                      altitude=data["altitude"], aerosol=data["aerosol"],
-                                      dem=dem, aeronet_file=data["aeronet_file"],
-                                      resolution=data["resolution"], aot550=data["aot550"],
-                                      angstrom=data["angstrom"], unzip=unzip, untar=untar,
-                                      startrow=startrow, maja_xml=data["maja_xml"],
-                                      waterdetect_file=data["waterdetect_file"],
-                                      waterdetect_only=waterdetect_only, memory_safe=data["memory_safe"],
-                                      angleonly=data["angleonly"], grs_a=data["grs_a"], output=data["output"], xblock=data["xblock"],
-                                      yblock=data["yblock"])
     except Exception as inst:
-        logging.info('-------------------------------')
-        logging.info('error for file  ', inst, ' skip')
-        logging.info('-------------------------------')
-        with open(data["logfile"], "a") as myfile:
-            myfile.write('error during grs \n')
+        logging.error('-------------------------------')
+        message = 'error for file  ' + str(inst) + ' skip'
+        logging.error(message)
+        logging.error('-------------------------------')
+        logging.error('error during grs', exc_info=True)
 
+    finally:
+        # Close logger and get stats
+        class_logger.get_instance().close()
+
+
+if __name__ == '__main__':
+    main()
