@@ -1,9 +1,7 @@
-# Deprecated, see new official repository https://github.com/CNES/GRSprocessor
-
-#GRS algorithm package
+# GRS algorithm package
 ## GRS (Glint Removal for Sentinel-2-like sensors)
 
-Please check [grs documentation](https://grs.readthedocs.io/en/latest/)
+Please check [grs documentation](https://grs.readthedocs.io/)
 
 The GRS (Glint Removal for Sentinel-2) algorithm [Harmel et al., 2018](https://www.sciencedirect.com/science/article/pii/S0034425717304856)
 was specifically developed to
@@ -16,7 +14,7 @@ water surface level.
 First, the gaseous absorption (mainly CO2, H2O and O3) correction is performed based on parameterizations of the gas transmittances from full radiative transfer
 computations using lidRadtran v2.0.4. Atmospheric pressure and gas concentrations are retrieved from bilinear
 interpolation within the grid of the Copernicus Atmosphere Monitoring Service dataset (CAMS). Then, spectral radiances
-are corrected for the diffuse skylight and its reflection on the air-water interface. For each pixel, the diffuse
+are corrected for the diffuse sky light and its reflection on the air-water interface. For each pixel, the diffuse
 radiance component is reconstructed for the given viewing geometry (i.e., sensor and Sun viewing angles and relative
 azimuth) from pre-computed look-up tables (LUT). The Rayleigh optical thickness is rescaled based on the actual pressure
 at the scene level to take into account the effects of the altitude on the scattering properties of the atmosphere.
@@ -52,44 +50,11 @@ transmittances) calculated for the bimodal aerosol model from the LUT. The versi
 response of each band of Sentinel-2 A and B as well as Landsat-8 and it is based on the CAMS aerosol data for the
 spectral value of $`\tau _a`$.
 
+This version of the algorithm was adapted by Matheus Tavares for Windows environments. It has been tested on different Windows machines, but there might
+be some issues related to this adaptation. In case of issues or questions, email me at: matheus.tavares@ird.fr
+
 
 ## Getting Started
-
-## Installation on TREX (CNES)
-1. First install GRSdriver from https://gitlab.cnes.fr/waterquality/io/GRSdriver following the README instruction.
-You should have now a conda environment called grs_cnes up.
-
-2. First clone the repository (from https or ssh):
-```commandline
-git clone https://gitlab.cnes.fr/waterquality/grs2.git
-```
-or
-```commandline
-git clone git@gitlab.cnes.fr:waterquality/grs2.git
-```
-
-And go on Branch v2.1
-```commandline
-git checkout v2.1
-```
-
-3. Make sure that the grsdata variable is set as follows in the config.yml file:
-```commandline
-grsdata: '/work/datalake//watcal/GRS/grsdata_v21'
-```
-
-4. To complete installation please activate your conda grs_cnes environment as follows:
-```commandline
-ml conda
-conda activate grs_cnes
-pip install .
-```
-
-You are done, please check [Testing](#testing)
-  
-
-## Installation on other machine
-These instructions will get you a copy of the project up and running on your local machine for development and testing purposes. See deployment for notes on how to deploy the project on a live system.
 
 ### Download the LUT files:
 click  on [grsdata](https://drive.google.com/drive/folders/1N0-FtW-PTPblR4z-82fFrUTekMd8e3Vz?usp=sharing)
@@ -102,18 +67,22 @@ conda activate "name of your conda env"
 
 Python >= 3.9 is recommended, example:
 ``` 
-conda create python=3.10 -n grs_v2
-conda activate grs_v2
+conda create python=3.10 -n grs_v219
+conda activate grs_v219
 ```
-Then, install python dependencies:
+Then, install python dependencies with conda:
 ``` 
-conda install -c conda-forge eoreader cdsapi netCDF4 docopt xmltodict numba
+conda install -c conda-forge gdal numpy==1.25.2 importlib_resources==6.5.2 docopt numba pandas pyproj matplotlib PyYAML==6.0.2 geotiff==1.7.4 rasterio==1.4.3 netCDF4==1.6.5 scipy xarray==2024.9.0 rioxarray==0.15.0 dask==2024.12.1 cdsapi==0.6.1 xmltodict holoviews==1.19.1 libgdal-jp2openjpeg datashader fiona==1.10.1 geopandas panel sertit eoreader==0.21.4 shapely scipy xmltodict pystac lightgbm jupyterlab setuptools==80.9.0 aenum dataclasses-json marshmallow oauthlib psutil requests-oauthlib tifffile tomli  sentinelhub==3.11.5 scikit-learn
 ```
 Set the `config.yml` file:
 ```
 path:
   grsdata: your_GRSDATA_PATH
 ``` 
+Now, install python libraries only available with pip:
+``` 
+pip install --no-deps opencv-python-headless==4.10.0.84 GRSdriver==1.0.5 s2cloudless==1.7.3
+```
 
 Finally, install grs with:
 ```commandline
@@ -160,71 +129,11 @@ Options:
   --snap_compliant  Export output to netcdf aligned with "beam" for ESA SNAP software
 
   Example:
-      grs /data/satellite/S2/L1C/S2B_MSIL1C_20220731T103629_N0400_R008_T31TFJ_20220731T124834.SAFE --cams_file /data/satellite/S2/cnes/CAMS/2022-07-31-cams-global-atmospheric-composition-forecasts.nc --resolution 60
-  For CNES datalake:
-      grs /work/datalake/S2-L1C/31TFJ/2023/06/16/S2B_MSIL1C_20230616T103629_N0509_R008_T31TFJ_20230616T111826.SAFE --cams_file /work/datalake/watcal/ECMWF/CAMS/2023/06/16/2023-06-16-cams-global-atmospheric-composition-forecasts.nc --odir /work/datalake/watcal/test --resolution 20 --dem_file /work/datalake/static_aux/MNT/COP-DEM_GLO-30-DGED_S2_tiles/COP-DEM_GLO-30-DGED_31TFJ.tif
+      grs \data\satellite\S2\L1C\S2B_MSIL1C_20220731T103629_N0400_R008_T31TFJ_20220731T124834.SAFE --cams_file \data\satellite\S2\cnes\CAMS\2022-07-31-cams-global-atmospheric-composition-forecasts.nc -o C:\data\satellite\GRS\Outputs --resolution 60
 ```
-
-If you are on TREX CNES you can run the grs example using a SLURM interactive job:
-```commandline
-unset SLURM_JOB_ID
-srun -A cnes_level2 -N 1 -c 8 --time=02:00:00 --mem=64G --x11 --pty bash
-ml conda
-conda activate grs_cnes
-grs /work/datalake/S2-L1C/31TFJ/2023/06/16/S2B_MSIL1C_20230616T103629_N0509_R008_T31TFJ_20230616T111826.SAFE --cams_file /work/datalake/watcal/ECMWF/CAMS/2023/06/16/2023-06-16-cams-global-atmospheric-composition-forecasts.nc --odir /work/datalake/watcal/test --resolution 20 --dem_file /work/datalake/static_aux/MNT/COP-DEM_GLO-30-DGED_S2_tiles/COP-DEM_GLO-30-DGED_31TFJ.tif 
-```
-
-### Script for installation on the HAL CNES HPC:
-```commandline
-# set your grs path here
-your_path_to_grs=/work/scratch/$USER/dev/grs
-
-cd $your_path_to_grs
-git clone git@gitlab.cnes.fr:waterquality/grs2.git
-ml conda/4.12.0
-mkdir /work/scratch/$USER/tmp
-export TMPDIR=/work/scratch/$USER/tmp
-conda create python=3.10 -n grs_v2
-conda activate grs_v2
-conda install gdal geopandas -c conda-forge-remote
-pip install cdsapi netCDF4 matplotlib docopt xarray dask dask[array] toolz>=0.8.2 affine xmltodict bokeh eoreader lxml numba
-ml gcc
-make
-pip install .
-
-grs -h
-```
-
 
 ### To download CAMS data
 [Register](https://apps.ecmwf.int/registration/) and [ask for a key](https://confluence.ecmwf.int/display/WEBAPI/Accessing+ECMWF+data+servers+in+batch#AccessingECMWFdataserversinbatch-key) to use ECMWF API
-
-
-
-
-
-
-
-### On the PBS cluster : installing from sources with conda on the cluster CNES
-
-Create the conda environment using the definition file available in the conda folder :
-```
-conda env create -f conda/grs_conda_3.6.yml -p /work/scratch/$user/grs_py3.6
-```
-The option -p set the directory where the conda environment will be installed
-
-To install the package grs in conda :
-
-```
-source conda/conda_grs.sh -ci
-```
-
-
-To launch GRS on a pbs node :
-
-```
-qsub launch_grs_exemple.pbs
-```
 
 ## Running the tests
 From terminal:
@@ -239,59 +148,6 @@ You should get something like:
 Another examples of output images before (1st column) and after  (2nd column) sunglint correction:
 
 ![image_output](images/Fig_valid_qualit_sea_scale.png)
-
-### Lauch with docker [deprecated]:
-```
-qsub -q qdev -I -l walltime=4:00:00
-
-/opt/bin/drunner run -it -v /datalake/watcal:/datalake/watcal artifactory.cnes.fr/obs2co-docker/grs:1.4.0 python /app/grs/exe/launcher.py /app/grs/exe//app/grs/exe/global_config.yml
-```
-
-## Deployment
-
-See examples in [exe](exe).
-
-## Compile Docker image locally
-First and foremost, you must have the coresponding version of GRSdriver at the same level as grs2.
-You should also make sure that the grsdata folder is full (it is a LTS).
-Eventually, you must get Dockerfile out of grs2 folder to have a structure as diplayed below.
-
-head_folder  
- ├grs2  
- ├GRSdriver  
- └Dockerfile
-
-Note that anything in this folder tree will be added to the Docker build context, so make it light.
-You might consider removing the notebooks and all useless files and directories from the grs2 & GRSdriver
-folders to make the resulting image as light as possible (.git, illustration, notebook...).
-
-Once all those requirements are met, you can compile the Docker image using the following command:
-```
-docker build -t grs2:<version_tag> *path_to_head_folder* -f *path_to_Dockerfile*
-```
-
-When the compilation has ended, you can access the image with the command:
-```
-docker images
-```
-
-To run the Docker image in a container on a S2 raster you can use the run_docker.sh script as follow:
-```
-./run_docker.sh <image_ID> <S2_raster_path> <CMAS_data_path> <desired_name_for_output> <desired_path_for_output> <desired_resolution> <surfwater_tif_path>
-```
-Example:
-```
-./run_docker.sh grs2:V2_CNES \
-/DATA/S2_raster/S2B_MSIL1C_20220228T102849_N0400_R108_T31TFJ_20220228T123819.SAFE \
-/DATA/CAMS/2022-02-28-cams-global-atmospheric-composition-forecasts.nc \
-S2B_L2Agrs_20220228T102849_N0400_R108_T31TFJ_20220228T123819 \
-/DATA/grs_outputs \
-60 \
-/DATA/Surfwater/SURFWATER_OPTICAL-SINGLE_T31TFJ_20220228T103850_20220228T103850_1-0-4_06/SURFWATER_OPTICAL-SINGLE_T31TFJ_20220228T103850_20220228T103850_1-0-4_06.tif
-```
-
-The docker containers will be called grs2, which mean that you cannot currently launch multiple ones simultaneously.
-You can adapt the sh script to modify this behaviour.
 
 ## Contributing
 
@@ -313,4 +169,3 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md
 with the snappy API.
 * The authors are very grateful to Olivier Hagolle
 for providing open source codes to perform gaseous absorption correction and massive Sentinel-2 data download.
-
