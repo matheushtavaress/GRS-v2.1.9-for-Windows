@@ -72,7 +72,7 @@ conda activate grs_v219
 ```
 Then, install python dependencies with conda:
 ``` 
-conda install -c conda-forge gdal numpy==1.25.2 importlib_resources==6.5.2 docopt numba pandas pyproj matplotlib PyYAML==6.0.2 geotiff==1.7.4 rasterio==1.4.3 netCDF4==1.6.5 scipy xarray==2024.9.0 rioxarray==0.15.0 dask==2024.12.1 cdsapi==0.6.1 xmltodict holoviews==1.19.1 libgdal-jp2openjpeg datashader fiona==1.10.1 geopandas panel sertit eoreader==0.21.4 shapely scipy xmltodict pystac lightgbm jupyterlab setuptools==80.9.0 aenum dataclasses-json marshmallow oauthlib psutil requests-oauthlib tifffile tomli  sentinelhub==3.11.5 scikit-learn
+conda install -c conda-forge gdal numpy==1.25.2 importlib_resources==6.5.2 docopt numba pandas matplotlib PyYAML==6.0.2 geotiff==1.7.4 rasterio==1.4.3 netCDF4==1.6.5 scipy xarray==2024.9.0 rioxarray==0.15.0 dask==2024.12.1 cdsapi==0.6.1 xmltodict holoviews==1.19.1 libgdal-jp2openjpeg datashader fiona==1.10.1 geopandas panel eoreader==0.21.4 pystac lightgbm jupyterlab setuptools==80.9.0 psutil sentinelhub==3.11.5 scikit-learn
 ```
 Set the `config.yml` file:
 ```
