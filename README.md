@@ -70,9 +70,18 @@ Python >= 3.9 is recommended, example:
 conda create python=3.10 -n grs_v219
 conda activate grs_v219
 ```
-Then, install python dependencies with conda:
+Then, install python dependencies with conda. They are required dependencies from the conda-forge channel, with libraries grouped by functionality to make the installation easier to troubleshoot. You can either use the requirements.txt to be used with conda, or use the recommended order of installation:
 ``` 
-conda install -c conda-forge gdal numpy==1.25.2 importlib_resources==6.5.2 docopt numba pandas matplotlib PyYAML==6.0.2 geotiff==1.7.4 rasterio==1.4.3 netCDF4==1.6.5 scipy xarray==2024.9.0 rioxarray==0.15.0 dask==2024.12.1 cdsapi==0.6.1 xmltodict holoviews==1.19.1 libgdal-jp2openjpeg datashader fiona==1.10.1 geopandas panel eoreader==0.21.4 pystac lightgbm jupyterlab setuptools==80.9.0 psutil sentinelhub==3.11.5 scikit-learn
+conda config --env --set channel_priority strict
+conda install -c conda-forge gdal
+conda install -c conda-forge importlib_resources==6.5.2 matplotlib numba numpy==1.25.2 pandas scipy setuptools==80.9.0
+conda install -c conda-forge fiona==1.10.1 geotiff==1.7.4 libgdal-jp2openjpeg rasterio==1.4.3
+conda install -c conda-forge dask==2024.12.1 netCDF4==1.6.5 rioxarray xarray==2024.9.0
+conda install -c conda-forge eoreader==0.21.4 geopandas pystac sentinelhub==3.11.5
+conda install -c conda-forge datashader holoviews==1.19.1 panel
+conda install -c conda-forge cdsapi docopt psutil PyYAML==6.0.2 xmltodict
+conda install -c conda-forge lightgbm scikit-learn
+conda install -c conda-forge jupyterlab
 ```
 Set the `config.yml` file:
 ```
