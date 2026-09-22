@@ -22,8 +22,7 @@ requires-python = ">=3.9"
 where = ["."]
 
 [tool.setuptools.package-data]
-"grs"= ['*.yml']
-"*"= ['data/lut/gases/*.nc', 'data/aux_files/*.txt']
+"grs" = ['data/lut/gases/*.nc', 'data/aux_files/*.txt']
 
 [tool.setuptools.exclude-package-data]
 "*" = [".gitattributes"]

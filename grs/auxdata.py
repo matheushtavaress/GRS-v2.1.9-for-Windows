@@ -10,6 +10,14 @@ import xarray as xr
 
 from scipy.interpolate import interp1d
 
+import warnings
+
+warnings.filterwarnings(
+    "ignore",
+    module="pkg_resources",
+    category=UserWarning,
+)
+
 from pkg_resources import resource_filename
 from importlib.resources import files
 
@@ -33,7 +41,6 @@ NDWI_swir_threshold = [0.12, 2.]
 
 # ******************************************************************************************************
 dir, filename = os.path.split(__file__)
-
 
 location = Path(__file__).resolve().parent / "data" / "aux_files"
 

@@ -15,9 +15,9 @@ from . import AuxData, __version__, __package__
 
 opj = os.path.join
 
-configfile = files(__package__) / 'config.yml'
-with open(configfile, 'r') as file:
-    config = yaml.safe_load(file)
+from pathlib import Path
+
+p_grsdata = Path.cwd() / "grsdata"
 
 
 class Product():
@@ -126,7 +126,7 @@ class Product():
         self.hcld_threshold = 3e-3
 
         # pre-computed auxiliary data
-        self.dirdata = config['path']['grsdata']
+        self.dirdata = p_grsdata
         self.abs_gas_file = files('grs.data.lut.gases') / 'lut_abs_opt_thickness_normalized.nc'
         # self.lut_file = opj(self.dirdata, 'lut', 'opac_osoaa_lut_v2.nc')
         self.water_vapor_transmittance_file = files('grs.data.lut.gases') / 'water_vapor_transmittance.nc'

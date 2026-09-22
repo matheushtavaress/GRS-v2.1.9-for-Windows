@@ -26,21 +26,26 @@ from .grs_exceptions import GRS_IO_Exception
 
 opj = os.path.join
 
-configfile = importlib_resources.files(__package__) / 'config.yml'
-with open(configfile, 'r') as file:
-    config = yaml.safe_load(file)
+p_grsdata = Path.cwd() / "grsdata"
 
-GRSDATA = config['path']['grsdata']
-TOALUT = config['path']['toa_lut']
-TRANSLUT = config['path']['trans_lut']
-CAMS_PATH = config['path']['trans_lut']
-NCPU = config['processor']['ncpu']
+TOALUT = p_grsdata / 'toa_lut_opac_wind_light_v2.nc'
+TRANSLUT = p_grsdata / 'transmittance_lut_opac_wind_light_v2.nc'
+CAMS_PATH = '/work/datalake/watcal/cams'
+NCPU = 8
 
 # Global state used by multiprocessing workers
 _WORKER_STATE = None
 _WORKER_SHM_RRS = None
 _WORKER_SHM_RF = None
-
+_WORKER_SHM_BANDS = None
+_WORKER_SHM_SZA = None
+_WORKER_SHM_RAA = None
+_WORKER_SHM_VZA = None
+_WORKER_SHM_AOT_REF = None
+_WORKER_SHM_PRESSURE = None
+_WORKER_SHM_TG = None
+_WORKER_SHM_TG_DIFF = None
+_WORKER_SHM_RDIFF = None
 
 def init_worker(worker_state):
     """
@@ -50,6 +55,15 @@ def init_worker(worker_state):
     global _WORKER_STATE
     global _WORKER_SHM_RRS
     global _WORKER_SHM_RF
+    global _WORKER_SHM_BANDS
+    global _WORKER_SHM_SZA
+    global _WORKER_SHM_RAA
+    global _WORKER_SHM_VZA
+    global _WORKER_SHM_AOT_REF
+    global _WORKER_SHM_PRESSURE
+    global _WORKER_SHM_TG
+    global _WORKER_SHM_TG_DIFF
+    global _WORKER_SHM_RDIFF
 
     _WORKER_STATE = worker_state
 
@@ -60,7 +74,41 @@ def init_worker(worker_state):
     _WORKER_SHM_RF = shared_memory.SharedMemory(
         name=worker_state["shm_Rf_name"]
     )
+    _WORKER_SHM_BANDS = shared_memory.SharedMemory(
+        name=worker_state["shm_bands_name"]
+    )
 
+    _WORKER_SHM_SZA = shared_memory.SharedMemory(
+        name=worker_state["shm_sza_name"]
+    )
+
+    _WORKER_SHM_RAA = shared_memory.SharedMemory(
+        name=worker_state["shm_raa_name"]
+    )
+
+    _WORKER_SHM_VZA = shared_memory.SharedMemory(
+        name=worker_state["shm_vza_name"]
+    )
+
+    _WORKER_SHM_AOT_REF = shared_memory.SharedMemory(
+        name=worker_state["shm_aot_ref_name"]
+    )
+
+    _WORKER_SHM_PRESSURE = shared_memory.SharedMemory(
+        name=worker_state["shm_pressure_name"]
+    )
+
+    _WORKER_SHM_TG = shared_memory.SharedMemory(
+        name=worker_state["shm_Tg_name"]
+    )
+
+    _WORKER_SHM_TG_DIFF = shared_memory.SharedMemory(
+        name=worker_state["shm_Tg_diff_name"]
+    )
+
+    _WORKER_SHM_RDIFF = shared_memory.SharedMemory(
+        name=worker_state["shm_Rdiff_name"]
+    )
 
 def chunk_process(args):
     """
@@ -72,24 +120,18 @@ def chunk_process(args):
 
     height = state["height"]
     width = state["width"]
-    prod = state["prod"]
+    chunk = state["chunk"]
+    dtype = np.dtype(state["dtype"])
+    iwl_swir = state["iwl_swir"]
     monoview = state["monoview"]
+
     _R_ = state["_R_"]
-
-    shared_Rrs = state["shared_Rrs"]
-    shared_Rf = state["shared_Rf"]
-
-    aot_ref_raster = state["aot_ref_raster"]
-    _pressure = state["_pressure"]
-    Tg_raster = state["Tg_raster"]
-    Tg_diff_raster = state["Tg_diff_raster"]
 
     szas = state["szas"]
     vzas = state["vzas"]
     azis = state["azis"]
     aot_refs = state["aot_refs"]
 
-    Rdiff_lut = state["Rdiff_lut"]
     Rray = state["Rray"]
 
     aot_lut = state["aot_lut"]
@@ -103,23 +145,77 @@ def chunk_process(args):
     pressure_ref = state["pressure_ref"]
     _sigma2 = state["_sigma2"]
 
-    prod_chunk = prod.chunk
+    prod_chunk = state["chunk"]
     yc = min(height, iy + prod_chunk)
     xc = min(width, ix + prod_chunk)
 
     Rrs_tmp = np.ndarray(
         state["Rrs_shape"],
-        dtype=np.dtype(state["dtype"]),
+        dtype=np.dtype(state["Rrs_dtype"]),
         buffer=_WORKER_SHM_RRS.buf
     )
 
     Rf_tmp = np.ndarray(
         state["Rf_shape"],
-        dtype=np.dtype(state["dtype"]),
+        dtype=np.dtype(state["Rf_dtype"]),
         buffer=_WORKER_SHM_RF.buf
     )
 
-    _band_rad = prod.raster.bands[:, iy:yc, ix:xc]
+    bands = np.ndarray(
+        state["bands_shape"],
+        dtype=np.dtype(state["bands_dtype"]),
+        buffer=_WORKER_SHM_BANDS.buf
+    )
+
+    sza = np.ndarray(
+        state["sza_shape"],
+        dtype=np.dtype(state["sza_dtype"]),
+        buffer=_WORKER_SHM_SZA.buf
+    )
+
+    raa = np.ndarray(
+        state["raa_shape"],
+        dtype=np.dtype(state["raa_dtype"]),
+        buffer=_WORKER_SHM_RAA.buf
+    )
+
+    vza = np.ndarray(
+        state["vza_shape"],
+        dtype=np.dtype(state["vza_dtype"]),
+        buffer=_WORKER_SHM_VZA.buf
+    )
+
+    aot_ref = np.ndarray(
+        state["aot_ref_shape"],
+        dtype=np.dtype(state["aot_ref_dtype"]),
+        buffer=_WORKER_SHM_AOT_REF.buf
+    )
+
+    pressure = np.ndarray(
+        state["pressure_shape"],
+        dtype=np.dtype(state["pressure_dtype"]),
+        buffer=_WORKER_SHM_PRESSURE.buf
+    )
+
+    Tg = np.ndarray(
+        state["Tg_shape"],
+        dtype=np.dtype(state["Tg_dtype"]),
+        buffer=_WORKER_SHM_TG.buf
+    )
+
+    Tg_diff = np.ndarray(
+        state["Tg_diff_shape"],
+        dtype=np.dtype(state["Tg_diff_dtype"]),
+        buffer=_WORKER_SHM_TG_DIFF.buf
+    )
+
+    Rdiff_lut = np.ndarray(
+        state["Rdiff_shape"],
+        dtype=np.dtype(state["Rdiff_dtype"]),
+        buffer=_WORKER_SHM_RDIFF.buf
+    )
+
+    _band_rad = bands[:, iy:yc, ix:xc]
 
     Nwl, Ny, Nx = _band_rad.shape
 
@@ -129,30 +225,30 @@ def chunk_process(args):
     arr_tmp = np.full(
         (Nwl, Ny, Nx),
         np.nan,
-        dtype=prod._type
+        dtype = np.dtype(state["dtype"])
     )
 
     # ------------------------------------------
     # Angles
     # ------------------------------------------
 
-    _sza = prod.raster.sza[iy:yc, ix:xc]
+    _sza = sza[iy:yc, ix:xc]
 
     if monoview:
-        _raa = prod.raster.raa[iy:yc, ix:xc]
-        _vza = prod.raster.vza[iy:yc, ix:xc]
-        _vza_mean = _vza.values
+        _raa = raa[iy:yc, ix:xc]
+        _vza = vza[iy:yc, ix:xc]
+        _vza_mean = _vza
     else:
-        _raa = prod.raster.raa[:, iy:yc, ix:xc]
-        _vza = prod.raster.vza[:, iy:yc, ix:xc]
-        _vza_mean = np.mean(_vza, axis=0).values
+        _raa = raa[:, iy:yc, ix:xc]
+        _vza = vza[:, iy:yc, ix:xc]
+        _vza_mean = np.mean(_vza, axis=0)
 
     _azi = (180. - _raa) % 360
 
     _air_mass_ = acutils.Misc.air_mass(
         _sza,
         _vza
-    ).values
+    )
 
     # Fix for bug with azimuth
     _p_slope_ = 1.
@@ -161,12 +257,12 @@ def chunk_process(args):
     # Atmospheric parameters
     # ------------------------------------------
 
-    _aot_ref = aot_ref_raster.values[iy:yc, ix:xc]
+    _aot_ref = aot_ref[iy:yc, ix:xc]
 
-    _pressure_ = _pressure[iy:yc, ix:xc] / pressure_ref
+    _pressure_ = pressure[iy:yc, ix:xc] / pressure_ref
 
-    _Tg_abs = Tg_raster[:, iy:yc, ix:xc].values
-    _Tg_abs_diff = Tg_diff_raster[:, iy:yc, ix:xc].values
+    _Tg_abs = Tg[:, iy:yc, ix:xc]
+    _Tg_abs_diff = Tg_diff[:, iy:yc, ix:xc]
 
     # Rayleigh optical thickness
     _rot_raster = _R_._multiplicate(
@@ -181,26 +277,26 @@ def chunk_process(args):
 
     _Rdiff = _R_.interp_Rlut(
         szas,
-        _sza.values,
+        _sza,
         vzas,
-        _vza.values,
+        _vza,
         azis,
-        _azi.values,
+        _azi,
         aot_refs,
         _aot_ref,
         Nwl,
         Ny,
         Nx,
-        Rdiff_lut.values
+        Rdiff_lut
     )
 
     _Rray = _R_.interp_Rlut_rayleigh(
         szas,
-        _sza.values,
+        _sza,
         vzas,
-        _vza.values,
+        _vza,
         azis,
-        _azi.values,
+        _azi,
         Nwl,
         Ny,
         Nx,
@@ -222,7 +318,7 @@ def chunk_process(args):
     # Atmospheric correction
     # ------------------------------------------
 
-    Rcorr = _band_rad.values - _Rdiff
+    Rcorr = _band_rad - _Rdiff
 
     Tdir = acutils.Misc.transmittance_dir(
         _aot,
@@ -232,7 +328,7 @@ def chunk_process(args):
 
     Tdown = _R_._interp_Tlut(
         szas,
-        _sza.values,
+        _sza,
         Ttot_Ed_.aot_ref.values,
         _aot_ref,
         Nwl,
@@ -259,12 +355,12 @@ def chunk_process(args):
     # ------------------------------------------
 
     Rf = np.full(
-        (len(prod.iwl_swir), Ny, Nx),
+        (len(iwl_swir), Ny, Nx),
         np.nan,
-        dtype=prod._type
+        dtype=dtype
     )
 
-    for iwl in prod.iwl_swir:
+    for iwl in iwl_swir:
 
         if monoview:
             Rf[iwl] = (
@@ -327,8 +423,8 @@ class Process:
     '''
 
     def __init__(self):
-        self.lut_file = opj(GRSDATA, TOALUT)
-        self.trans_lut_file = opj(GRSDATA, TRANSLUT)
+        self.lut_file = TOALUT
+        self.trans_lut_file = TRANSLUT
         self.cams_dir = CAMS_PATH
         self.Nproc = NCPU
         self.pressure_ref = 101500.
@@ -853,6 +949,109 @@ class Process:
             buffer=shm_Rf.buf
         )
 
+        bands = np.asarray(prod.raster.bands)
+        sza = np.asarray(prod.raster.sza)
+        raa = np.asarray(prod.raster.raa)
+        vza = np.asarray(prod.raster.vza)
+        aot_ref = np.asarray(aot_ref_raster)
+        pressure = np.asarray(_pressure)
+        Tg = np.asarray(Tg_raster)
+        Tg_diff = np.asarray(Tg_diff_raster)
+        Rdiff = np.asarray(Rdiff_lut)
+
+        shm_bands = shared_memory.SharedMemory(
+            create=True,
+            size=bands.nbytes
+        )
+        shm_sza = shared_memory.SharedMemory(
+            create=True,
+            size=sza.nbytes
+        )
+        shm_raa = shared_memory.SharedMemory(
+            create=True,
+            size=raa.nbytes
+        )
+        shm_vza = shared_memory.SharedMemory(
+            create=True,
+            size=vza.nbytes
+        )
+        shm_aot_ref = shared_memory.SharedMemory(
+            create=True,
+            size=aot_ref.nbytes
+        )
+        shm_pressure = shared_memory.SharedMemory(
+            create=True,
+            size=pressure.nbytes
+        )
+        shm_Tg = shared_memory.SharedMemory(
+            create=True,
+            size=Tg.nbytes
+        )
+        shm_Tg_diff = shared_memory.SharedMemory(
+            create=True,
+            size=Tg_diff.nbytes
+        )
+        shm_Rdiff = shared_memory.SharedMemory(
+            create=True,
+            size=Rdiff.nbytes
+        )
+
+        shared_bands = np.ndarray(
+            bands.shape,
+            dtype=bands.dtype,
+            buffer=shm_bands.buf
+        )
+        shared_sza = np.ndarray(
+            sza.shape,
+            dtype=sza.dtype,
+            buffer=shm_sza.buf
+        )
+        shared_raa = np.ndarray(
+            raa.shape,
+            dtype=raa.dtype,
+            buffer=shm_raa.buf
+        )
+        shared_vza = np.ndarray(
+            vza.shape,
+            dtype=vza.dtype,
+            buffer=shm_vza.buf
+        )
+        shared_aot_ref = np.ndarray(
+            aot_ref.shape,
+            dtype=aot_ref.dtype,
+            buffer=shm_aot_ref.buf
+        )
+        shared_pressure = np.ndarray(
+            pressure.shape,
+            dtype=pressure.dtype,
+            buffer=shm_pressure.buf
+        )
+        shared_Tg = np.ndarray(
+            Tg.shape,
+            dtype=Tg.dtype,
+            buffer=shm_Tg.buf
+        )
+        shared_Tg_diff = np.ndarray(
+            Tg_diff.shape,
+            dtype=Tg_diff.dtype,
+            buffer=shm_Tg_diff.buf
+        )
+        shared_Rdiff = np.ndarray(
+            Rdiff.shape,
+            dtype=Rdiff.dtype,
+            buffer=shm_Rdiff.buf
+        )
+
+        shared_bands[:] = bands
+        shared_sza[:] = sza
+        shared_raa[:] = raa
+        shared_vza[:] = vza
+        shared_aot_ref[:] = aot_ref
+        shared_pressure[:] = pressure
+        shared_Tg[:] = Tg
+        shared_Tg_diff[:] = Tg_diff
+        shared_Rdiff[:] = Rdiff
+
         # -------------------------------------------------------------
         # Worker state
         # -------------------------------------------------------------
@@ -860,26 +1059,54 @@ class Process:
         worker_state = {
             "height": height,
             "width": width,
-
-            "prod": prod,
-            "_R_": _R_,
+            "chunk": prod.chunk,
+            "dtype": np.dtype(prod._type).str,
+            "iwl_swir": prod.iwl_swir,
             "monoview": monoview,
 
-            "shared_Rrs": Rrs_result,
-            "shared_Rf": Rf_result,
+            "shm_bands_name": shm_bands.name,
+            "bands_shape": bands.shape,
+            "bands_dtype": bands.dtype.str,
 
-            "aot_ref_raster": aot_ref_raster,
-            "_pressure": _pressure,
+            "shm_sza_name": shm_sza.name,
+            "sza_shape": sza.shape,
+            "sza_dtype": sza.dtype.str,
 
-            "Tg_raster": Tg_raster,
-            "Tg_diff_raster": Tg_diff_raster,
+            "shm_raa_name": shm_raa.name,
+            "raa_shape": raa.shape,
+            "raa_dtype": raa.dtype.str,
+
+            "shm_vza_name": shm_vza.name,
+            "vza_shape": vza.shape,
+            "vza_dtype": vza.dtype.str,
+
+            "_R_": _R_,
 
             "szas": szas,
             "vzas": vzas,
             "azis": azis,
             "aot_refs": aot_refs,
 
-            "Rdiff_lut": Rdiff_lut,
+            "shm_aot_ref_name": shm_aot_ref.name,
+            "aot_ref_shape": aot_ref.shape,
+            "aot_ref_dtype": aot_ref.dtype.str,
+
+            "shm_pressure_name": shm_pressure.name,
+            "pressure_shape": pressure.shape,
+            "pressure_dtype": pressure.dtype.str,
+
+            "shm_Tg_name": shm_Tg.name,
+            "Tg_shape": Tg.shape,
+            "Tg_dtype": Tg.dtype.str,
+
+            "shm_Tg_diff_name": shm_Tg_diff.name,
+            "Tg_diff_shape": Tg_diff.shape,
+            "Tg_diff_dtype": Tg_diff.dtype.str,
+
+            "shm_Rdiff_name": shm_Rdiff.name,
+            "Rdiff_shape": Rdiff.shape,
+            "Rdiff_dtype": Rdiff.dtype.str,
+
             "Rray": Rray,
             "aot_lut": aot_lut,
 
@@ -893,10 +1120,12 @@ class Process:
             "_sigma2": _sigma2,
 
             "shm_Rrs_name": shm_Rrs.name,
-            "shm_Rf_name": shm_Rf.name,
             "Rrs_shape": Rrs_result.shape,
+            "Rrs_dtype": Rrs_result.dtype.str,
+
+            "shm_Rf_name": shm_Rf.name,
             "Rf_shape": Rf_result.shape,
-            "dtype": str(prod._type),
+            "Rf_dtype": Rf_result.dtype.str,
         }
 
         # -------------------------------------------------------------
@@ -917,70 +1146,125 @@ class Process:
 
         ctx = mp.get_context("spawn")
 
-        with ctx.Pool(
-                processes=nproc,
-                initializer=init_worker,
-                initargs=(worker_state,)
-        ) as pool:
+        import pickle
+        # for key, value in worker_state.items():
+        #     try:
+        #         size_mb = len(pickle.dumps(value)) / 1024 / 1024
+        #         logging.info(
+        #             "worker_state[%s]: %.1f MB",
+        #             key,
+        #             size_mb
+        #         )
+        #     except Exception:
+        #         logging.info(
+        #             "worker_state[%s]: could not pickle",
+        #             key
+        #         )
 
-            pool.map(
-                chunk_process,
-                window_idxs
-            )
+        test_pickle = pickle.dumps(worker_state)
 
-        logging.info('construct final product')
-
-        # -------------------------------------------------------------
-        # Construct final xarray object
-        # -------------------------------------------------------------
-
-        l2_prod = xr.Dataset(
-            {
-                "Rrs": (["wl", "y", "x"], Rrs_result),
-                "BRDFg": (["y", "x"], Rf_result),
-                "aot550": (["y", "x"], aot_ref_raster.values),
-            },
-            coords={
-                "wl": prod.raster.wl,
-                "x": prod.raster.x,
-                "y": prod.raster.y,
-            },
+        logging.info(
+            "worker_state pickle size: %.1f MB",
+            len(test_pickle) / 1024 / 1024
         )
 
-        logging.info('success')
+        try:
+            with ctx.Pool(
+                    processes=nproc,
+                    initializer=init_worker,
+                    initargs=(worker_state,)
+            ) as pool:
 
-        l2_prod['central_wavelength'] = ('wl', prod.raster.wl_true.values)
-        l2_prod = l2_prod.set_coords('central_wavelength')
+                pool.map(
+                    chunk_process,
+                    window_idxs
+                )
 
-        ##############################################
-        # Update flags and create mask from recipe
-        ##############################################
-        # flags for negative blue/green Rrs
-        bitmask = 18
-        prod.raster['flags'] = prod.raster.flags + (((l2_prod.Rrs.sel(wl=490, method='nearest') < -0.0005) |
-                                                     (l2_prod.Rrs.sel(wl=565, method='nearest') < -0.0005)) << bitmask)
-        # add name and description
-        prod.raster.flags.attrs['flag_descriptions'][bitmask] = 'negative Rrs for blue or green bands'
-        prod.raster.flags.attrs['flag_names'][bitmask] = 'neg_rrs'
+            logging.info('construct final product')
 
-        # mask from recipe
-        mask = masking_.create_mask(prod.raster.flags,
-                                    tomask=self.flags_tomask,
-                                    tokeep=self.flags_tokeep,
-                                    mask_name="mask")
-        l2_prod = xr.merge([l2_prod, mask])
+            # -------------------------------------------------------------
+            # Construct final xarray object
+            # -------------------------------------------------------------
 
-        ######################################
-        # Write final product
-        ######################################
-        self.l2_prod = l2_prod
-        self.l2a = L2aProduct(prod, l2_prod, cams, gas_trans, dem)
+            Rrs_final = Rrs_result.copy()
+            Rf_final = Rf_result.copy()
 
-        shm_Rrs.close()
-        shm_Rrs.unlink()
+            l2_prod = xr.Dataset(
+                {
+                    "Rrs": (["wl", "y", "x"], Rrs_final),
+                    "BRDFg": (["y", "x"], Rf_final),
+                    "aot550": (["y", "x"], aot_ref_raster.values),
+                },
+                coords={
+                    "wl": prod.raster.wl,
+                    "x": prod.raster.x,
+                    "y": prod.raster.y,
+                },
+            )
 
-        shm_Rf.close()
-        shm_Rf.unlink()
+            logging.info('success')
+
+            l2_prod['central_wavelength'] = ('wl', prod.raster.wl_true.values)
+            l2_prod = l2_prod.set_coords('central_wavelength')
+
+            ##############################################
+            # Update flags and create mask from recipe
+            ##############################################
+            # flags for negative blue/green Rrs
+            bitmask = 18
+            prod.raster['flags'] = prod.raster.flags + (((l2_prod.Rrs.sel(wl=490, method='nearest') < -0.0005) |
+                                                         (l2_prod.Rrs.sel(wl=565,
+                                                                          method='nearest') < -0.0005)) << bitmask)
+            # add name and description
+            prod.raster.flags.attrs['flag_descriptions'][bitmask] = 'negative Rrs for blue or green bands'
+            prod.raster.flags.attrs['flag_names'][bitmask] = 'neg_rrs'
+
+            # mask from recipe
+            mask = masking_.create_mask(prod.raster.flags,
+                                        tomask=self.flags_tomask,
+                                        tokeep=self.flags_tokeep,
+                                        mask_name="mask")
+            l2_prod = xr.merge([l2_prod, mask])
+
+            ######################################
+            # Write final product
+            ######################################
+            self.l2_prod = l2_prod
+            self.l2a = L2aProduct(prod, l2_prod, cams, gas_trans, dem)
+
+        finally:
+            shm_bands.close()
+            shm_bands.unlink()
+
+            shm_sza.close()
+            shm_sza.unlink()
+
+            shm_raa.close()
+            shm_raa.unlink()
+
+            shm_vza.close()
+            shm_vza.unlink()
+
+            shm_aot_ref.close()
+            shm_aot_ref.unlink()
+
+            shm_pressure.close()
+            shm_pressure.unlink()
+
+            shm_Tg.close()
+            shm_Tg.unlink()
+
+            shm_Tg_diff.close()
+            shm_Tg_diff.unlink()
+
+            shm_Rdiff.close()
+            shm_Rdiff.unlink()
+
+            shm_Rrs.close()
+            shm_Rrs.unlink()
+
+            shm_Rf.close()
+            shm_Rf.unlink()
 
         return
 
