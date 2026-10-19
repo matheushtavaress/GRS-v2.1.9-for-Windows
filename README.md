@@ -57,8 +57,8 @@ be some issues related to this adaptation. In case of issues or questions, email
 ## Getting Started
 
 ### Download the LUT files:
-click  on [grsdata](https://drive.google.com/drive/folders/1N0-FtW-PTPblR4z-82fFrUTekMd8e3Vz?usp=sharing)
- to download and save in your desired path (your_GRSDATA_PATH) 
+After cloning the github files, click  on [grsdata](https://drive.google.com/drive/folders/1N0-FtW-PTPblR4z-82fFrUTekMd8e3Vz?usp=sharing)
+ to download it, and save it inside folder `grsdata` in the GRS folder.
 
 ### please use conda environment
 ``` 
@@ -74,23 +74,23 @@ Then, install python dependencies with conda. They are required dependencies fro
 ``` 
 conda config --env --set channel_priority strict
 conda install -c conda-forge gdal
-conda install -c conda-forge importlib_resources==6.5.2 matplotlib numba numpy==1.25.2 pandas scipy setuptools==80.9.0
-conda install -c conda-forge fiona==1.10.1 geotiff==1.7.4 libgdal-jp2openjpeg rasterio==1.4.3
-conda install -c conda-forge dask==2024.12.1 netCDF4==1.6.5 rioxarray xarray==2024.9.0
-conda install -c conda-forge eoreader==0.21.4 geopandas pystac sentinelhub==3.11.5
-conda install -c conda-forge datashader holoviews==1.19.1 panel
-conda install -c conda-forge cdsapi docopt psutil PyYAML==6.0.2 xmltodict
-conda install -c conda-forge lightgbm scikit-learn
-conda install -c conda-forge jupyterlab
+conda install -c conda-forge numpy==1.25.2 importlib_resources==6.5.2 docopt numba pandas pyproj
+conda install -c conda-forge matplotlib PyYAML==6.0.2 geotiff==1.7.4 rasterio==1.4.3
+conda install -c conda-forge netCDF4==1.6.5 scipy xarray==2024.9.0 rioxarray==0.15.0
+conda install -c conda-forge dask==2024.12.1
+conda install -c conda-forge cdsapi==0.6.1 xmltodict holoviews==1.19.1 libgdal-jp2openjpeg
+conda install -c conda-forge datashader fiona==1.10.1 geopandas
+conda install -c conda-forge panel sertit eoreader==0.21.4
+conda install -c conda-forge shapely scipy xmltodict pystac lightgbm jupyterlab setuptools==80.9.0
+conda install -c conda-forge aenum dataclasses-json marshmallow oauthlib psutil requests-oauthlib tifffile tomli  sentinelhub==3.11.5 scikit-learn
 ```
-Set the `config.yml` file:
-```
-path:
-  grsdata: your_GRSDATA_PATH
-``` 
 Now, install python libraries only available with pip:
 ``` 
 pip install --no-deps opencv-python-headless==4.10.0.84 GRSdriver==1.0.5 s2cloudless==1.7.3
+```
+Check if there are no library conflicts:
+```
+python -m pip check
 ```
 
 Finally, install grs with:
