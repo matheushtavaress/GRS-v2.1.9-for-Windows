@@ -142,7 +142,8 @@ Options:
 ```
 
 ### To download CAMS data
-[Register](https://apps.ecmwf.int/registration/) and [ask for a key](https://confluence.ecmwf.int/display/WEBAPI/Accessing+ECMWF+data+servers+in+batch#AccessingECMWFdataserversinbatch-key) to use ECMWF API
+[Register](https://apps.ecmwf.int/registration/) and [ask for a key](https://confluence.ecmwf.int/display/WEBAPI/Accessing+ECMWF+data+servers+in+batch#AccessingECMWFdataserversinbatch-key) to use ECMWF API.
+
 To download it, please check this [jupyter notebook](https://grs.readthedocs.io/en/latest/examples/download_cams.html) as example.
 
 ## Running the tests
