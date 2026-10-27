@@ -29,9 +29,9 @@ class Settings:
         self.bwv = 945
 
         # mask thresholding parameters
-        self.swir_threshold = 0.2
+        self.swir_threshold = 0.0
         self.ndwi_threshold = 0.0
-        self.vis_swir_index_threshold = 0.2
+        self.vis_swir_index_threshold = 0.0
         self.thin_cirrus_threshold = 3e-3
         self.opac_cirrus_threshold = 9e-3
 
